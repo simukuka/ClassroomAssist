@@ -1,4 +1,5 @@
-import { FormEvent, KeyboardEvent, useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import type { FormEvent, KeyboardEvent } from 'react'
 import './App.css'
 
 type Role = 'user' | 'assistant'
@@ -9,49 +10,102 @@ type Message = {
   content: string
 }
 
-const modelOptions = [
-  {
-    id: 'llama-3.3-70b-versatile',
-    label: 'Llama 3.3 70B',
-    description: 'Best balance of quality and speed',
-  },
-  {
-    id: 'llama-3.1-8b-instant',
-    label: 'Llama 3.1 8B Instant',
-    description: 'Fast replies for lightweight chats',
-  },
-  {
-    id: 'mixtral-8x7b-32768',
-    label: 'Mixtral 8x7B',
-    description: 'Strong reasoning and structured output',
-  },
-] as const
+type Bookmark = {
+  id: string
+  content: string
+}
 
-const promptIdeas = [
-  'Write a concise product description for a smart planner app.',
-  'Draft a friendly onboarding message for a customer support bot.',
-  'Explain the difference between fine-tuning and prompt engineering.',
-  'Turn these notes into a polished roadmap.',
+type Subject = 'general' | 'math' | 'science' | 'english' | 'history'
+
+const subjects: Array<{ id: Subject; label: string }> = [
+  { id: 'general', label: 'General' },
+  { id: 'math', label: 'Math' },
+  { id: 'science', label: 'Science' },
+  { id: 'english', label: 'English' },
+  { id: 'history', label: 'History' },
 ]
 
-const systemPrompt =
-  'You are a helpful product-focused assistant that gives crisp, well-structured answers. Keep responses friendly, useful, and easy to scan.'
+const quickPrompts = [
+  'Explain this like I am 12 years old.',
+  'Help me study this topic with bullet points.',
+  'Give me 3 practice questions.',
+]
 
-const groqApiKey = import.meta.env.VITE_GROQ_API_KEY as string | undefined
+const welcomeMessage =
+  'Hi, I am your classroom helper. Ask me a question and I will explain it in a simple, friendly way.'
+
+const defaultMessages: Message[] = [
+  {
+    id: crypto.randomUUID(),
+    role: 'assistant',
+    content: welcomeMessage,
+  },
+]
+
+const messageStorageKey = 'classroom-assist-messages'
+const densityStorageKey = 'classroom-assist-compact-mode'
+const subjectStorageKey = 'classroom-assist-subject'
+const bookmarksStorageKey = 'classroom-assist-bookmarks'
 
 function App() {
-  const [messages, setMessages] = useState<Message[]>([
-    {
-      id: crypto.randomUUID(),
-      role: 'assistant',
-      content:
-        'Welcome to Nova Chat. Ask anything, and I will answer with Groq-powered speed.',
-    },
-  ])
+  const [showLogoFallback, setShowLogoFallback] = useState(false)
+  const [isCompact] = useState<boolean>(() => {
+    const savedDensity = localStorage.getItem(densityStorageKey)
+    return savedDensity === 'true'
+  })
+  const [messages, setMessages] = useState<Message[]>(() => {
+    try {
+      const savedMessages = localStorage.getItem(messageStorageKey)
+      if (!savedMessages) {
+        return defaultMessages
+      }
+
+      const parsedMessages = JSON.parse(savedMessages) as Message[]
+      if (!Array.isArray(parsedMessages) || parsedMessages.length === 0) {
+        return defaultMessages
+      }
+
+      return parsedMessages
+    } catch {
+      return defaultMessages
+    }
+  })
   const [input, setInput] = useState('')
+  const [selectedSubject, setSelectedSubject] = useState<Subject>(() => {
+    const savedSubject = localStorage.getItem(subjectStorageKey) as Subject | null
+    if (!savedSubject) {
+      return 'general'
+    }
+
+    return subjects.some((subject) => subject.id === savedSubject)
+      ? savedSubject
+      : 'general'
+  })
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [selectedModel, setSelectedModel] = useState(modelOptions[0].id)
+  const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null)
+  const [bookmarks, setBookmarks] = useState<Bookmark[]>(() => {
+    try {
+      const savedBookmarks = localStorage.getItem(bookmarksStorageKey)
+      if (!savedBookmarks) {
+        return []
+      }
+
+      const parsedBookmarks = JSON.parse(savedBookmarks) as Bookmark[]
+      if (!Array.isArray(parsedBookmarks)) {
+        return []
+      }
+
+      return parsedBookmarks.filter(
+        (bookmark) =>
+          typeof bookmark?.id === 'string' &&
+          typeof bookmark?.content === 'string' &&
+          bookmark.content.trim().length > 0,
+      )
+    } catch {
+      return []
+    }
+  })
   const viewportRef = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
@@ -60,6 +114,18 @@ function App() {
       behavior: 'smooth',
     })
   }, [messages])
+
+  useEffect(() => {
+    localStorage.setItem(messageStorageKey, JSON.stringify(messages))
+  }, [messages])
+
+  useEffect(() => {
+    localStorage.setItem(subjectStorageKey, selectedSubject)
+  }, [selectedSubject])
+
+  useEffect(() => {
+    localStorage.setItem(bookmarksStorageKey, JSON.stringify(bookmarks))
+  }, [bookmarks])
 
   const submitMessage = async (messageText: string) => {
     const trimmedInput = messageText.trim()
@@ -79,63 +145,35 @@ function App() {
     setError(null)
     setIsLoading(true)
 
-    if (!groqApiKey) {
-      setMessages((current) => [
-        ...current,
-        {
-          id: crypto.randomUUID(),
-          role: 'assistant',
-          content:
-            'Groq API key not found. Add VITE_GROQ_API_KEY to .env.local, then restart the dev server.',
-        },
-      ])
-      setIsLoading(false)
-      return
-    }
-
     try {
-      const response = await fetch(
-        'https://api.groq.com/openai/v1/chat/completions',
-        {
-          method: 'POST',
-          headers: {
-            Authorization: `Bearer ${groqApiKey}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            model: selectedModel,
-            temperature: 0.7,
-            messages: [
-              { role: 'system', content: systemPrompt },
-              ...nextMessages.map((message) => ({
-                role: message.role,
-                content: message.content,
-              })),
-            ],
-          }),
+      const response = await fetch('/api/chat', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
         },
-      )
+        body: JSON.stringify({
+          subject: selectedSubject,
+          messages: nextMessages.map((message) => ({
+            role: message.role,
+            content: message.content,
+          })),
+        }),
+      })
 
       if (!response.ok) {
         const payload = (await response.json().catch(() => null)) as
           | { error?: { message?: string } }
           | null
         throw new Error(
-          payload?.error?.message ?? 'Unable to reach the Groq API right now.',
+          payload?.error?.message ?? 'Unable to reach the classroom assistant.',
         )
       }
 
       const payload = (await response.json()) as {
-        choices?: Array<{
-          message?: {
-            content?: string
-          }
-        }>
+        reply?: string
       }
 
-      const reply =
-        payload.choices?.[0]?.message?.content?.trim() ??
-        'I did not receive a response body from Groq.'
+      const reply = payload.reply?.trim() ?? 'I did not receive a response.'
 
       setMessages((current) => [
         ...current,
@@ -156,8 +194,7 @@ function App() {
         {
           id: crypto.randomUUID(),
           role: 'assistant',
-          content:
-            'I could not complete that request. Check your API key, model name, and network connection.',
+          content: 'I could not complete that request. Please try again in a moment.',
         },
       ])
     } finally {
@@ -181,116 +218,190 @@ function App() {
     setInput(prompt)
   }
 
+  const copyMessage = async (message: Message) => {
+    try {
+      await navigator.clipboard.writeText(message.content)
+      setCopiedMessageId(message.id)
+      window.setTimeout(() => setCopiedMessageId(null), 1200)
+    } catch {
+      setError('Unable to copy right now.')
+    }
+  }
+
+  const isBookmarked = (messageId: string) =>
+    bookmarks.some((bookmark) => bookmark.id === messageId)
+
+  const toggleBookmark = (message: Message) => {
+    if (message.role !== 'assistant') {
+      return
+    }
+
+    setBookmarks((current) => {
+      if (current.some((bookmark) => bookmark.id === message.id)) {
+        return current.filter((bookmark) => bookmark.id !== message.id)
+      }
+
+      return [...current, { id: message.id, content: message.content }]
+    })
+  }
+
+  const currentSubjectLabel =
+    subjects.find((subject) => subject.id === selectedSubject)?.label ?? 'General'
+
   return (
     <main className="app-shell">
-      <section className="sidebar">
-        <div className="brand-block">
-          <div className="brand-mark">G</div>
-          <div>
-            <p className="eyebrow">Groq assistant</p>
-            <h1>Nova Chat</h1>
+      <section className={`chat-shell ${isCompact ? 'compact' : 'spacious'}`}>
+        <header className="topbar">
+          <div className="school-logo" aria-hidden="true">
+            {showLogoFallback ? (
+              <span className="logo-fallback">AAMU</span>
+            ) : (
+              <img
+                src="/aamu-logo.png"
+                alt=""
+                onError={() => setShowLogoFallback(true)}
+              />
+            )}
           </div>
-        </div>
-
-        <p className="sidebar-copy">
-          A polished conversational interface with model controls, quick prompts,
-          and a clean response workspace.
-        </p>
-
-        <div className="status-card">
-          <span className={`status-dot ${groqApiKey ? 'live' : 'missing'}`} />
-          <div>
-            <strong>{groqApiKey ? 'Ready to send' : 'API key missing'}</strong>
-            <p>
-              {groqApiKey
-                ? 'Connected through Groq-compatible chat completions.'
-                : 'Add VITE_GROQ_API_KEY in .env.local before using the chat.'}
+          <div className="topbar-copy">
+            <h1 className="title-row">
+              <span className="title-dot" aria-hidden="true" />
+              Classroom Assist
+            </h1>
+            <p className="subtitle">
+              Alabama A&M student helper for class questions and study support.
             </p>
           </div>
-        </div>
-
-        <div className="model-panel">
-          <label htmlFor="model">Model</label>
-          <select
-            id="model"
-            value={selectedModel}
-            onChange={(event) => setSelectedModel(event.target.value)}
-          >
-            {modelOptions.map((option) => (
-              <option key={option.id} value={option.id}>
-                {option.label}
-              </option>
-            ))}
-          </select>
-          <p>
-            {modelOptions.find((option) => option.id === selectedModel)?.description}
-          </p>
-        </div>
-
-        <div className="tips-panel">
-          <h2>Quick starts</h2>
-          <div className="prompt-list">
-            {promptIdeas.map((prompt) => (
-              <button key={prompt} type="button" onClick={() => usePrompt(prompt)}>
-                {prompt}
-              </button>
-            ))}
-          </div>
-        </div>
-      </section>
-
-      <section className="chat-card">
-        <header className="chat-header">
-          <div>
-            <p className="eyebrow">Live conversation</p>
-            <h2>Design-first chat experience</h2>
-          </div>
-          <div className="header-pill">{isLoading ? 'Thinking…' : 'Idle'}</div>
+          <span className="status-pill">AAMU Online</span>
         </header>
 
-        <div className="chat-viewport" ref={viewportRef}>
-          {messages.map((message) => (
-            <article key={message.id} className={`message ${message.role}`}>
-              <div className="message-label">
-                {message.role === 'user' ? 'You' : 'Groq'}
+        <section className="chat-card">
+          <div className="chat-layout">
+            <div className="chat-main">
+              <div className="chat-main-header">
+                <div>
+                  <h2>Conversation</h2>
+                  <p>{Math.max(messages.length - 1, 0)} student messages</p>
+                </div>
+                <span className="subject-badge">Mode: {currentSubjectLabel}</span>
               </div>
-              <p>{message.content}</p>
-            </article>
-          ))}
-          {isLoading ? (
-            <article className="message assistant loading">
-              <div className="message-label">Groq</div>
-              <p>Composing a response with the selected model.</p>
-            </article>
-          ) : null}
-        </div>
 
-        <form className="composer" onSubmit={handleSubmit}>
-          <label className="composer-label" htmlFor="prompt">
-            Message
-          </label>
-          <textarea
-            id="prompt"
-            value={input}
-            onChange={(event) => setInput(event.target.value)}
-            onKeyDown={handleComposerKeyDown}
-            placeholder="Ask for copy, strategy, coding help, summaries, or brainstorm ideas..."
-            rows={4}
-          />
+              <div className="chat-viewport" ref={viewportRef}>
+                {messages.map((message) => (
+                  <article key={message.id} className={`message ${message.role}`}>
+                    <div className="message-head">
+                      <div className="message-label">
+                        {message.role === 'user' ? 'You' : 'Assistant'}
+                      </div>
+                      {message.role === 'assistant' ? (
+                        <div className="message-actions">
+                          <button
+                            type="button"
+                            className="copy-button"
+                            onClick={() => void copyMessage(message)}
+                          >
+                            {copiedMessageId === message.id ? 'Copied' : 'Copy'}
+                          </button>
+                          <button
+                            type="button"
+                            className={`bookmark-button ${isBookmarked(message.id) ? 'active' : ''}`}
+                            onClick={() => toggleBookmark(message)}
+                          >
+                            {isBookmarked(message.id) ? 'Saved' : 'Save'}
+                          </button>
+                        </div>
+                      ) : null}
+                    </div>
+                    <p>{message.content}</p>
+                  </article>
+                ))}
+                {isLoading ? (
+                  <article className="message assistant loading">
+                    <div className="message-label">Assistant</div>
+                    <p className="thinking-row">
+                      Thinking
+                      <span className="typing-dots" aria-hidden="true">
+                        <span />
+                        <span />
+                        <span />
+                      </span>
+                    </p>
+                  </article>
+                ) : null}
+              </div>
 
-          <div className="composer-footer">
-            <p className="helper-copy">
-              Press <span>Enter</span> to send. Use <span>Shift+Enter</span> for a
-              new line.
-            </p>
-            <div className="actions-row">
-              {error ? <span className="error-copy">{error}</span> : null}
-              <button type="submit" className="send-button" disabled={isLoading}>
-                {isLoading ? 'Sending' : 'Send message'}
-              </button>
+              <form className="composer" onSubmit={handleSubmit}>
+                <textarea
+                  id="prompt"
+                  value={input}
+                  onChange={(event) => setInput(event.target.value)}
+                  onKeyDown={handleComposerKeyDown}
+                  placeholder="Type your question..."
+                  rows={4}
+                />
+
+                <div className="composer-footer">
+                  <p className="hint-text">Enter to send, Shift+Enter for a new line.</p>
+                  {error ? <span className="error-copy">{error}</span> : null}
+                  <button type="submit" className="send-button" disabled={isLoading}>
+                    {isLoading ? 'Sending' : 'Send'}
+                  </button>
+                </div>
+              </form>
             </div>
+
+            <aside className="study-rail">
+              <section className="rail-panel" aria-label="Subject mode">
+                <h2>Subject</h2>
+                <div className="subject-switch">
+                  {subjects.map((subject) => (
+                    <button
+                      key={subject.id}
+                      type="button"
+                      className={selectedSubject === subject.id ? 'active' : ''}
+                      onClick={() => setSelectedSubject(subject.id)}
+                    >
+                      {subject.label}
+                    </button>
+                  ))}
+                </div>
+              </section>
+
+              <section className="rail-panel" aria-label="Quick prompt suggestions">
+                <h2>Quick prompts</h2>
+                <div className="quick-prompts">
+                  {quickPrompts.map((prompt) => (
+                    <button key={prompt} type="button" onClick={() => usePrompt(prompt)}>
+                      {prompt}
+                    </button>
+                  ))}
+                </div>
+              </section>
+
+              <section className="bookmarks-panel" aria-label="Saved responses">
+                <h2>Saved responses</h2>
+                {bookmarks.length === 0 ? (
+                  <p className="empty-bookmarks">
+                    Save helpful assistant replies to keep a quick study list.
+                  </p>
+                ) : (
+                  <div className="bookmark-list">
+                    {bookmarks.map((bookmark) => (
+                      <button
+                        key={bookmark.id}
+                        type="button"
+                        className="bookmark-item"
+                        onClick={() => setInput(bookmark.content)}
+                      >
+                        {bookmark.content}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </section>
+            </aside>
           </div>
-        </form>
+        </section>
       </section>
     </main>
   )
