@@ -269,7 +269,7 @@ function App() {
               Classroom Assist
             </h1>
             <p className="subtitle">
-              Alabama A&M student helper for class questions and study support.
+             Alabama A&M University Online Learning Assistant
             </p>
           </div>
           <span className="status-pill">AAMU Online</span>
